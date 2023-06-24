@@ -679,6 +679,73 @@ no_mem_error:
     return ERR_NO_MEMORY;
 }
 
+static int try_exec_default_cmd(console_t *con, bool locked)
+{
+    int i, err;
+    int argc;
+    console_cmd_args *args;
+    const console_cmd *cmd;
+    const char *buffer = AUTO_BOOT_CMD;
+    const char *continuebuffer;
+    char *outbuf = NULL;
+    const size_t outbuflen = 1024;
+
+    args = (console_cmd_args *) malloc (MAX_NUM_ARGS * sizeof(console_cmd_args));
+    if (unlikely(args == NULL)) {
+	err = ERR_NO_MEMORY;
+        goto err_ret;
+    }
+
+    outbuf = malloc(outbuflen);
+    if (unlikely(outbuf == NULL)) {
+	err = ERR_NO_MEMORY;
+        goto err_ret;
+    }
+
+    argc = tokenize_command(buffer, &continuebuffer, outbuf, outbuflen,
+                                    args, MAX_NUM_ARGS);
+
+    if (argc < 0) {
+	err = ERR_CMD_UNKNOWN;
+        goto err_ret;
+    }
+
+    cmd = match_command(args[0].str, CMD_AVAIL_NORMAL);
+    if (!cmd)
+        return -1;
+
+    fputs("sleep 1s...\n", stdout);
+    for (i = 0; i < 5; i++) {
+        fputs(" .", stdout);
+        thread_sleep(1000);
+    }
+    fputs("\n", stdout);
+
+    if (!locked)
+        mutex_acquire(&con->lock);
+
+    con->abort_script = false;
+    con->lastresult = cmd->cmd_callback(1, args);
+    con->abort_script = false;
+
+    if (!locked)
+        mutex_release(&con->lock);
+
+    err = NO_ERROR;
+
+err_ret:
+    if (outbuf)
+        free(outbuf);
+
+    if (args)
+        free(args);
+
+    if (err != NO_ERROR)
+        dprintf(INFO, "%s: error %d\n", __func__, err);
+
+    return err;
+}
+
 void console_abort_script(console_t *con) {
     if (!con) {
         con = console_get_current();
@@ -705,6 +772,9 @@ void console_start(console_t *con) {
     dprintf(INFO, "entering main console loop\n");
 
     console_set_current(con);
+
+    if (try_exec_default_cmd(con, false) != NO_ERROR)
+        dprintf(INFO, "failed to exec default command\n");
 
     while (command_loop(con, &read_debug_line, con, true, false) == NO_ERROR)
         ;
